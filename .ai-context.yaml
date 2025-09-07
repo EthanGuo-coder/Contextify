@@ -1,0 +1,55 @@
+# .ai-context.yaml - Contextify configuration (example)
+# Place this file in your project root directory
+
+# Output format: markdown, json, or yaml
+format: json
+ast: true
+focus: ""
+depth: 1
+workers: 4
+
+# Files and directories to exclude
+# These patterns are added to the default ignore list
+exclude:
+  - "contextify"
+  - "contextify-*.md"
+  - "*.test.go"
+  - "*_test.go"
+  - "testdata/*"
+  - "examples/*"
+  - "build/**"
+  - "dist/**"
+  - "docs/*"
+  - "*.md"
+  - "LICENSE"
+  - "Makefile"
+  - ".github/*"
+  - ".gitlab/*"
+  - "*.svg"
+  - "*.png"
+  - "*.jpg"
+  - "*.jpeg"
+  - "*.gif"
+  - "*.ico"
+  - "*.exe"
+  - "*.dll"
+  - "*.so"
+  - "*.dylib"
+  - "bin/**"
+
+# Files and directories to include
+# If specified, only these patterns will be included
+# Leave empty to include all non-excluded files
+include: [ ]
+# - "src/**/*.go"
+# - "pkg/**/*.go"
+# - "internal/**/*.go"
+# - "*.yaml"
+# - "go.mod"
+# - "go.sum"
+
+# Strip comments from code to reduce token usage
+strip_comments: false
+
+# Maximum estimated tokens (0 for unlimited)
+max_tokens: 0
