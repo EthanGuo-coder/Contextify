@@ -56,3 +56,5 @@ output/
 # Project specific
 .ai-context-cache/
 *.bak
+
+._.DS_Store
