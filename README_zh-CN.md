@@ -6,8 +6,7 @@
 
 <p align="center">
   <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8.svg?style=for-the-badge&logo=go" alt="Go Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="License"></a>
-  <a href="#"><img src="https://img.shields.io/github/v/release/EthanGuo-coder/Contextify?style=for-the-badge" alt="Release"></a>
+  <a href="#"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="License"></a>
 </p>
 
 有没有过这样的体验：想把一堆代码丢进 ChatGPT、Claude 或 Gemini，结果复制粘贴半天，最后上下文还丢了一半？😩 我们也深有体会。

@@ -6,8 +6,7 @@
 
 <p align="center">
   <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8.svg?style=for-the-badge&logo=go" alt="Go Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="License"></a>
-  <a href="#"><img src="https://img.shields.io/github/v/release/EthanGuo-coder/Contextify?style=for-the-badge" alt="Release"></a>
+  <a href="#"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="License"></a>
 </p>
 
 Ever find yourself wrestling with copy-pasting endless files into ChatGPT, Claude, or Gemini, only to lose half the important context? 😩 Yeah, we've been there.
