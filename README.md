@@ -1,6 +1,9 @@
-![](./main_img.png)
+<div align="center">
+
+<img alt="Preview" src="./public/contextify.png" width="100%" style="border-radius: 8px">
 
 # 🤖 Contextify - AI Code Context Extractor
+</div>
 
 <p align="center">
   <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8.svg?style=for-the-badge&logo=go" alt="Go Version"></a>
