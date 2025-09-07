@@ -24,7 +24,8 @@ import (
 
 const version = "1.0.0-contextify"
 
-// Config holds extraction configuration.
+// Config holds extraction configuration read from flags or .ai-context.yaml.
+// Fields map to CLI flags and to the YAML config file.
 type Config struct {
 	Path          string   `json:"path" yaml:"path"`
 	Output        string   `json:"output" yaml:"output"`
@@ -39,7 +40,7 @@ type Config struct {
 	Workers       int      `json:"workers" yaml:"workers"`
 }
 
-// FileInfo represents file extraction result.
+// FileInfo represents the extracted metadata and (optionally) content for one file.
 type FileInfo struct {
 	Path     string   `json:"path" yaml:"path"`
 	Language string   `json:"language" yaml:"language"`
@@ -49,7 +50,7 @@ type FileInfo struct {
 	Weight   int      `json:"-" yaml:"-"`
 }
 
-// ASTInfo holds lightweight AST summary for Go files.
+// ASTInfo is a lightweight summary of a Go file's top-level AST details.
 type ASTInfo struct {
 	Package   string   `json:"package" yaml:"package"`
 	Imports   []string `json:"imports" yaml:"imports"`
@@ -57,7 +58,7 @@ type ASTInfo struct {
 	Functions []string `json:"functions" yaml:"functions"`
 }
 
-// Context represents full project context.
+// Context is the full project extraction result to be serialized.
 type Context struct {
 	ProjectPath     string     `json:"project_path" yaml:"project_path"`
 	TreeStructure   string     `json:"tree_structure" yaml:"tree_structure"`
@@ -68,6 +69,7 @@ type Context struct {
 	Truncated       bool       `json:"truncated,omitempty" yaml:"truncated,omitempty"`
 }
 
+// defaultIgnorePatterns are common directory/file patterns that should be skipped.
 var defaultIgnorePatterns = []string{
 	".git", ".svn", ".hg",
 	"node_modules", "vendor", "target",
@@ -82,6 +84,8 @@ var defaultIgnorePatterns = []string{
 	"coverage", ".nyc_output",
 }
 
+// languageMap maps file extensions to a short language identifier.
+// Used to group output and to apply language-specific logic (e.g. comment stripping).
 var languageMap = map[string]string{
 	".go":    "go",
 	".java":  "java",
@@ -148,6 +152,7 @@ var (
 )
 
 func init() {
+	// CLI flags with sensible defaults.
 	extractCmd.Flags().StringVarP(&cfgPath, "path", "p", ".", "Path to the project directory")
 	extractCmd.Flags().StringVarP(&cfgOutput, "output", "o", "", "Output file path (default: auto-generated in project dir)")
 	extractCmd.Flags().StringVarP(&cfgFormat, "format", "f", "markdown", "Output format (markdown, json, yaml)")
@@ -170,6 +175,7 @@ func main() {
 	}
 }
 
+// runExtract composes the configuration, reads optional .ai-context.yaml, and runs extraction.
 func runExtract(cmd *cobra.Command, args []string) error {
 	cfg := &Config{
 		Path:          cfgPath,
@@ -185,41 +191,37 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		Workers:       cfgWorkers,
 	}
 
-	// merge CLI exclude customizations after defaults
+	// Merge user-specified exclude patterns after defaults.
 	if len(cfgExclude) > 0 {
 		cfg.Exclude = append(cfg.Exclude, cfgExclude...)
 	}
 
-	// Load project-level config if present
+	// Load project-level config if present.
 	if configFile := filepath.Join(cfg.Path, ".ai-context.yaml"); fileExists(configFile) {
 		if err := loadConfigFile(configFile, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to load config file: %v\n", err)
 		}
 	}
 
-	// Attempt to detect current executable name and add it to exclude list.
+	// Add current executable name patterns to exclude to avoid self-inclusion.
 	if exePath, err := os.Executable(); err == nil {
 		exeBase := filepath.Base(exePath)                              // e.g. "contextify" or "contextify.exe"
 		exeNoExt := strings.TrimSuffix(exeBase, filepath.Ext(exeBase)) // e.g. "contextify"
 
-		// Add both the exact exe name and the no-extension name
+		// Append a few likely variants to the exclude list.
 		cfg.Exclude = appendUnique(cfg.Exclude, exeBase)
 		if exeNoExt != exeBase {
 			cfg.Exclude = appendUnique(cfg.Exclude, exeNoExt)
 		}
-
-		// Also add common variants (in case user named binary differently)
-		// Patterns for auto-generated output files to avoid scanning them
 		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.md", exeNoExt))
 		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s_*.md", exeNoExt))
 		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.json", exeNoExt))
 		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.yaml", exeNoExt))
 		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.yml", exeNoExt))
-		// Also exclude a generic fixed name just in case
 		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s.md", exeNoExt))
 	}
 
-	// Validate
+	// Validate numeric options.
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
 	}
@@ -227,7 +229,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		cfg.Depth = 1
 	}
 
-	// Continue with extraction
+	// Perform extraction.
 	ctx, err := extractContext(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to extract context: %w", err)
@@ -238,7 +240,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate output: %w", err)
 	}
 
-	// If --output not specified, write to project directory with timestamped filename (safe default)
+	// Determine output destination if not provided.
 	if cfg.Output == "" {
 		ext := "md"
 		switch strings.ToLower(cfg.Format) {
@@ -265,13 +267,14 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("Context extracted successfully to %s\n", outPath)
 	} else {
-		// Write to user-specified output
+		// Write to user-specified output.
 		if err := os.WriteFile(cfg.Output, []byte(outStr), 0644); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		fmt.Printf("Context extracted successfully to %s\n", cfg.Output)
 	}
 
+	// Inform user if estimated tokens exceed configured maximum.
 	if cfg.MaxTokens > 0 && ctx.EstimatedTokens > cfg.MaxTokens {
 		fmt.Fprintf(os.Stderr, "Warning: Estimated tokens (%d) exceed maximum (%d)\n", ctx.EstimatedTokens, cfg.MaxTokens)
 	}
@@ -279,7 +282,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// appendUnique appends value to slice only if it's not already present.
+// appendUnique appends val to slice only if it's not already present.
 func appendUnique(slice []string, val string) []string {
 	for _, s := range slice {
 		if s == val {
@@ -289,6 +292,7 @@ func appendUnique(slice []string, val string) []string {
 	return append(slice, val)
 }
 
+// extractContext walks the project tree, filters files, and produces a Context.
 func extractContext(cfg *Config) (*Context, error) {
 	absPath, err := filepath.Abs(cfg.Path)
 	if err != nil {
@@ -300,19 +304,19 @@ func extractContext(cfg *Config) (*Context, error) {
 		Files:       []FileInfo{},
 	}
 
-	// Merge .gitignore patterns
+	// Add patterns from .gitignore if present.
 	gitignore := readGitignore(cfg.Path)
 	if len(gitignore) > 0 {
 		cfg.Exclude = append(cfg.Exclude, gitignore...)
 	}
 
-	// Walk project to build file list and tree
+	// Walk the filesystem to collect files and build a human-friendly tree string.
 	var treeBuf bytes.Buffer
 	files := []string{}
 
 	err = filepath.Walk(cfg.Path, func(path string, info os.FileInfo, wErr error) error {
 		if wErr != nil {
-			// continue on walk error but log
+			// Non-fatal walk error; log and continue.
 			fmt.Fprintf(os.Stderr, "Warning: walk error for %s: %v\n", path, wErr)
 			return nil
 		}
@@ -321,6 +325,7 @@ func extractContext(cfg *Config) (*Context, error) {
 			return nil
 		}
 
+		// Determine whether to skip this path.
 		if shouldExclude(relPath, cfg.Exclude, cfg.Include) {
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -345,7 +350,7 @@ func extractContext(cfg *Config) (*Context, error) {
 
 	ctx.TreeStructure = treeBuf.String()
 
-	// Concurrent processing of files
+	// Concurrent processing of files using worker goroutines.
 	fileCh := make(chan string, len(files))
 	resultCh := make(chan *FileInfo, len(files))
 	var wg sync.WaitGroup
@@ -371,7 +376,7 @@ func extractContext(cfg *Config) (*Context, error) {
 	}
 	close(fileCh)
 
-	// wait and then close resultCh
+	// Close resultCh after workers finish.
 	go func() {
 		wg.Wait()
 		close(resultCh)
@@ -384,14 +389,14 @@ func extractContext(cfg *Config) (*Context, error) {
 
 	ctx.TotalFiles = len(ctx.Files)
 
-	// If AST/focus requested and language is go, perform Go-level analysis (call graph + focus tracing)
+	// If AST extraction or focus tracing is requested, perform lightweight Go analysis.
 	if cfg.AST || cfg.Focus != "" {
 		performGoAnalysis(ctx, cfg)
 	}
 
 	ctx.EstimatedTokens = estimateTokens(ctx)
 
-	// If max tokens set and exceeded: try to trim files with a small heuristic
+	// If the result exceeds token limit, trim files heuristically.
 	if cfg.MaxTokens > 0 && ctx.EstimatedTokens > cfg.MaxTokens {
 		trimmed, truncated := trimFilesToTokenLimit(ctx, cfg.MaxTokens)
 		ctx.Files = trimmed
@@ -408,6 +413,7 @@ func extractContext(cfg *Config) (*Context, error) {
 	return ctx, nil
 }
 
+// processFile reads file bytes, decides language, strips comments (optional), and returns FileInfo.
 func processFile(path string, cfg *Config) (*FileInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -426,18 +432,18 @@ func processFile(path string, cfg *Config) (*FileInfo, error) {
 		return nil, err
 	}
 
-	// If file appears to be binary, do not include raw content — only metadata/placeholder
+	// If file looks binary, include a small placeholder rather than raw contents.
 	if isBinary(data) {
 		return &FileInfo{
 			Path:     relPath,
 			Language: "binary",
 			Content:  fmt.Sprintf("<binary file omitted, %d bytes>", info.Size()),
 			Size:     info.Size(),
-			Weight:   0, // deprioritize binaries for trimming/selection
+			Weight:   0, // binaries are deprioritized
 		}, nil
 	}
 
-	// Avoid including very large text files' full contents (saves tokens)
+	// Avoid embedding very large files to keep token usage reasonable.
 	const maxContentBytes = 1 << 20 // 1 MB
 	contentStr := string(data)
 	if info.Size() > int64(maxContentBytes) {
@@ -456,7 +462,7 @@ func processFile(path string, cfg *Config) (*FileInfo, error) {
 		Weight:   1,
 	}
 
-	// optionally parse AST for Go
+	// Optionally parse a lightweight AST summary for Go files.
 	if cfg.AST && language == "go" {
 		astInfo := parseGoASTFromBytes([]byte(contentStr))
 		fi.AST = astInfo
@@ -465,12 +471,10 @@ func processFile(path string, cfg *Config) (*FileInfo, error) {
 	return fi, nil
 }
 
-// isBinary checks whether a byte slice is likely a binary file.
-// Heuristics:
-// - ELF header (0x7f 'E”L”F') => true
-// - PE header 'MZ' => true
-// - contains NUL byte => true
-// - sample non-text control bytes ratio > threshold => true
+// isBinary uses a few fast heuristics to determine whether data is binary.
+// - checks for ELF/PE headers
+// - NUL bytes in the first 512 bytes
+// - proportion of non-printable characters in a sample
 func isBinary(data []byte) bool {
 	if len(data) >= 4 && data[0] == 0x7f && bytes.Equal(data[1:4], []byte("ELF")) {
 		return true
@@ -478,13 +482,13 @@ func isBinary(data []byte) bool {
 	if len(data) >= 2 && data[0] == 'M' && data[1] == 'Z' {
 		return true
 	}
-	// If contains NUL, almost certainly binary
+	// If contains NUL, almost certainly binary.
 	for i := 0; i < len(data) && i < 512; i++ {
 		if data[i] == 0 {
 			return true
 		}
 	}
-	// Heuristic: proportion of control/non-printable bytes in sample
+	// Heuristic: proportion of control characters in a sample.
 	sample := len(data)
 	if sample > 1024 {
 		sample = 1024
@@ -495,7 +499,7 @@ func isBinary(data []byte) bool {
 	nonText := 0
 	for i := 0; i < sample; i++ {
 		b := data[i]
-		// allow common whitespace and printable range and UTF-8 continuation bytes (>=0x80)
+		// allow common whitespace and UTF-8 continuation bytes (>=0x80)
 		if b == '\n' || b == '\r' || b == '\t' {
 			continue
 		}
@@ -503,15 +507,16 @@ func isBinary(data []byte) bool {
 			nonText++
 		}
 	}
-	return (nonText*100)/sample > 10 // >10% control chars -> binary
+	return (nonText*100)/sample > 10 // >10% control chars => binary
 }
 
-// parseGoASTFromBytes returns a lightweight AST summary (no deep analysis).
+// parseGoASTFromBytes returns a compact AST summary for a Go source file.
+// It intentionally keeps the result small and robust to parse errors.
 func parseGoASTFromBytes(src []byte) *ASTInfo {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "", src, parser.ParseComments)
 	if err != nil {
-		// if parse fails, return nil to avoid breaking pipeline
+		// If parse fails, return nil — keep pipeline resilient.
 		return nil
 	}
 	ai := &ASTInfo{}
@@ -522,11 +527,11 @@ func parseGoASTFromBytes(src []byte) *ASTInfo {
 		str := strings.Trim(imp.Path.Value, `"`)
 		ai.Imports = append(ai.Imports, str)
 	}
-	// iterate top-level declarations
+	// Collect top-level structs and functions.
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
-			// type declarations -> structs
+			// Type declarations -> record struct names.
 			for _, spec := range d.Specs {
 				if ts, ok := spec.(*ast.TypeSpec); ok {
 					switch ts.Type.(type) {
@@ -537,7 +542,7 @@ func parseGoASTFromBytes(src []byte) *ASTInfo {
 			}
 		case *ast.FuncDecl:
 			if d.Recv != nil && len(d.Recv.List) > 0 {
-				// method; include receiver type as prefix
+				// method: include receiver type as prefix
 				recvType := exprString(d.Recv.List[0].Type)
 				ai.Functions = append(ai.Functions, fmt.Sprintf("(%s).%s", recvType, d.Name.Name))
 			} else {
@@ -548,15 +553,17 @@ func parseGoASTFromBytes(src []byte) *ASTInfo {
 	return ai
 }
 
+// exprString renders a small subset of ast.Expr to a string.
+// This helper is intentionally minimal — it avoids importing go/printer.
 func exprString(expr ast.Expr) string {
 	var buf bytes.Buffer
 	_ = formatNode(&buf, expr)
 	return buf.String()
 }
 
+// formatNode writes a small set of expression node types to w.
+// It handles basic identifiers, pointers, and selector expressions.
 func formatNode(w io.Writer, n interface{}) error {
-	// a tiny helper to print simple expressions; we avoid importing go/printer to keep it minimal
-	// if needed, switch to go/printer for full fidelity
 	switch v := n.(type) {
 	case *ast.Ident:
 		_, _ = io.WriteString(w, v.Name)
@@ -568,13 +575,16 @@ func formatNode(w io.Writer, n interface{}) error {
 		_, _ = io.WriteString(w, ".")
 		_ = formatNode(w, v.Sel)
 	default:
-		// fallback: nothing
+		// unsupported node types are omitted for brevity.
 	}
 	return nil
 }
 
-// performGoAnalysis builds a simple call graph for functions and applies focus/depth tracing.
+// performGoAnalysis builds a simple call graph for Go files and marks files
+// according to the configured focus symbol and depth. Marking influences
+// which files are kept when trimming to token limits.
 func performGoAnalysis(ctx *Context, cfg *Config) {
+	// funcLoc holds function location metadata used to map functions to files.
 	type funcLoc struct {
 		File   string
 		Name   string
@@ -585,7 +595,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 	funcs := map[string]*funcLoc{}
 	fileSrc := map[string][]byte{}
 
-	// Parse all go files to build call graph
+	// Parse all Go files and collect function positions.
 	fset := token.NewFileSet()
 	fileASTs := map[string]*ast.File{}
 	for i := range ctx.Files {
@@ -610,7 +620,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 				start := fset.Position(fd.Pos()).Offset
 				end := fset.Position(fd.End()).Offset
 				key := name
-				// include method receiver if present
+				// include receiver type for methods to disambiguate
 				if fd.Recv != nil && len(fd.Recv.List) > 0 {
 					recv := exprString(fd.Recv.List[0].Type)
 					key = fmt.Sprintf("%s.%s", recv, name)
@@ -626,11 +636,11 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 		}
 	}
 
-	// Build call graph: function -> called function names
+	// Build a simple call graph: caller -> callee set
 	callGraph := map[string]map[string]struct{}{}
 	for _, astFile := range fileASTs {
 		ast.Inspect(astFile, func(n ast.Node) bool {
-			// We look for CallExpr; extract simple Ident or SelectorExpr names
+			// Look for CallExpr and extract a callee name in common forms.
 			if call, ok := n.(*ast.CallExpr); ok {
 				var callee string
 				switch fun := call.Fun.(type) {
@@ -641,15 +651,14 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 					if id, ok := fun.X.(*ast.Ident); ok {
 						callee = fmt.Sprintf("%s.%s", id.Name, fun.Sel.Name)
 					} else {
-						// fallback: Type.Method or something
+						// fallback to method name only
 						callee = fun.Sel.Name
 					}
 				}
-				// find enclosing function for this call
+				// Find enclosing function for this call and connect edges.
 				parent := findEnclosingFunc(astFile, call.Pos())
 				if parent != nil && parent.Name != nil {
 					parentName := parent.Name.Name
-					// method receiver?
 					if parent.Recv != nil && len(parent.Recv.List) > 0 {
 						r := exprString(parent.Recv.List[0].Type)
 						parentName = fmt.Sprintf("%s.%s", r, parentName)
@@ -666,16 +675,16 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 		})
 	}
 
-	// Focus BFS + weight marking
+	// If a focus symbol is provided, perform a breadth-first search from it
+	// and boost weights for visited functions/files to prioritize them.
 	if cfg.Focus != "" {
-		// normalize focus: try to match exactly or suffix match
 		queue := []string{cfg.Focus}
 		visited := map[string]struct{}{}
 		depth := 0
 		nextQueue := []string{}
 		for depth <= cfg.Depth && len(queue) > 0 {
 			for _, cur := range queue {
-				// find function keys matching cur (exact or suffix)
+				// match function keys by exact or suffix match
 				for k, fl := range funcs {
 					if k == cur || strings.HasSuffix(k, cur) || strings.HasSuffix(k, "."+cur) {
 						visited[k] = struct{}{}
@@ -685,7 +694,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 								ctx.Files[i].Weight += 1000
 							}
 						}
-						// enqueue callees
+						// enqueue callees for next level
 						if callees, ok := callGraph[k]; ok {
 							for callee := range callees {
 								nextQueue = append(nextQueue, callee)
@@ -698,7 +707,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 			nextQueue = []string{}
 			depth++
 		}
-		// mark callers of visited callees
+		// Also mark callers of the visited functions to preserve context.
 		for caller, callees := range callGraph {
 			for callee := range callees {
 				if _, ok := visited[callee]; ok {
@@ -715,7 +724,8 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 	}
 }
 
-// findEnclosingFunc finds ast.FuncDecl that encloses the given position.
+// findEnclosingFunc returns the FuncDecl that contains pos, if any.
+// This is a linear scan over top-level decls which is sufficient for small files.
 func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 	var found *ast.FuncDecl
 	for _, decl := range file.Decls {
@@ -729,8 +739,11 @@ func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 	return found
 }
 
+// stripComments removes comments for common languages using regex heuristics.
+// It is conservative: it removes single-line and multi-line comment forms,
+// then collapses empty lines to produce a denser output.
 func stripComments(content string, language string) string {
-	// Use robust regexes
+	// Use robust regexes per language family.
 	switch language {
 	case "go", "java", "javascript", "typescript", "c", "cpp", "csharp", "rust", "swift", "kotlin", "scala":
 		reSingle := regexp.MustCompile(`(?m)//.*$`)
@@ -753,7 +766,7 @@ func stripComments(content string, language string) string {
 		content = reMulti.ReplaceAllString(content, "")
 	}
 
-	// Remove consecutive empty lines and trim each line
+	// Trim trailing whitespace and remove empty lines to keep output compact.
 	lines := strings.Split(content, "\n")
 	out := make([]string, 0, len(lines))
 	for _, ln := range lines {
@@ -765,8 +778,10 @@ func stripComments(content string, language string) string {
 	return strings.Join(out, "\n")
 }
 
+// shouldExclude returns true if path should be skipped based on exclude/include patterns.
+// Include patterns (if present) act as a whitelist.
 func shouldExclude(path string, excludePatterns []string, includePatterns []string) bool {
-	// If include specified -> whitelist behavior
+	// If include patterns are specified, treat as whitelist.
 	if len(includePatterns) > 0 {
 		included := false
 		for _, pat := range includePatterns {
@@ -791,6 +806,7 @@ func shouldExclude(path string, excludePatterns []string, includePatterns []stri
 		}
 	}
 
+	// Collect explicit negations (patterns starting with "!")
 	negations := []string{}
 	for _, pat := range excludePatterns {
 		if strings.HasPrefix(pat, "!") {
@@ -798,29 +814,29 @@ func shouldExclude(path string, excludePatterns []string, includePatterns []stri
 		}
 	}
 
-	// Check exclude patterns
+	// Check exclude patterns first.
 	for _, pat := range excludePatterns {
 		if pat == "" {
 			continue
 		}
 		if strings.HasPrefix(pat, "!") {
-			// handled later as negation
+			// will be handled later
 			continue
 		}
-		// try absolute pattern match against path and basename
+		// Try glob match against path and basename.
 		if ok, _ := doublestar.Match(pat, path); ok {
 			return true
 		}
 		if ok, _ := doublestar.Match(pat, filepath.Base(path)); ok {
 			return true
 		}
-		// fallback to substring
+		// Fallback to substring match for convenience.
 		if strings.Contains(path, pat) {
 			return true
 		}
 	}
 
-	// Apply negations
+	// Apply negations: if any negation matches, do not exclude.
 	for _, n := range negations {
 		if ok, _ := doublestar.Match(n, path); ok {
 			return false
@@ -833,6 +849,7 @@ func shouldExclude(path string, excludePatterns []string, includePatterns []stri
 	return false
 }
 
+// readGitignore reads .gitignore lines (non-empty, non-comment).
 func readGitignore(projectPath string) []string {
 	gitignorePath := filepath.Join(projectPath, ".gitignore")
 	if !fileExists(gitignorePath) {
@@ -854,6 +871,8 @@ func readGitignore(projectPath string) []string {
 	return res
 }
 
+// estimateTokens returns a rough token estimate based on total character length.
+// Heuristic: 1 token ≈ 4 characters.
 func estimateTokens(ctx *Context) int {
 	totalChars := len(ctx.TreeStructure)
 	for _, f := range ctx.Files {
@@ -862,10 +881,10 @@ func estimateTokens(ctx *Context) int {
 			totalChars += len(strings.Join(f.AST.Functions, ",")) + len(strings.Join(f.AST.Structs, ","))
 		}
 	}
-	// heuristic: 1 token ~= 4 chars
 	return totalChars / 4
 }
 
+// generateOutput serializes ctx into the requested format.
 func generateOutput(ctx *Context, format string) (string, error) {
 	switch strings.ToLower(format) {
 	case "json":
@@ -895,6 +914,8 @@ func generateYAML(ctx *Context) (string, error) {
 	return string(b), nil
 }
 
+// generateMarkdown creates a human-friendly markdown summary containing
+// the directory tree, per-file sections (AST summary if available), and content blocks.
 func generateMarkdown(ctx *Context) (string, error) {
 	var b strings.Builder
 	b.WriteString("# Project Context (Contextify)\n\n")
@@ -910,7 +931,7 @@ func generateMarkdown(ctx *Context) (string, error) {
 	b.WriteString(ctx.TreeStructure)
 	b.WriteString("```\n\n")
 
-	// group by language
+	// Group files by language for easier navigation.
 	filesByLang := map[string][]FileInfo{}
 	for _, f := range ctx.Files {
 		filesByLang[f.Language] = append(filesByLang[f.Language], f)
@@ -924,7 +945,7 @@ func generateMarkdown(ctx *Context) (string, error) {
 	for _, lang := range langs {
 		files := filesByLang[lang]
 		b.WriteString(fmt.Sprintf("### %s Files\n\n", strings.Title(lang)))
-		// sort by path
+		// sort by path for stable output
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 		for _, f := range files {
 			b.WriteString(fmt.Sprintf("#### `%s` — %d bytes\n\n", f.Path, f.Size))
@@ -958,11 +979,12 @@ func generateMarkdown(ctx *Context) (string, error) {
 		}
 	}
 
-	// footer
+	// Footer with generation timestamp.
 	b.WriteString(fmt.Sprintf("_Generated by Contextify on %s_\n", time.Now().UTC().Format(time.RFC3339)))
 	return b.String(), nil
 }
 
+// loadConfigFile merges a YAML config file into cfg without overwriting CLI values.
 func loadConfigFile(path string, cfg *Config) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -972,7 +994,7 @@ func loadConfigFile(path string, cfg *Config) error {
 	if err := yaml.Unmarshal(data, &fileCfg); err != nil {
 		return err
 	}
-	// Merge with precedence: CLI already applied; only apply missing fields
+	// Merge with precedence: CLI > config file.
 	if cfg.Format == "" && fileCfg.Format != "" {
 		cfg.Format = fileCfg.Format
 	}
@@ -1008,11 +1030,11 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// trimFilesToTokenLimit trims ctx.Files to try to fit under tokenLimit. Returns trimmed slice and whether truncation happened.
+// trimFilesToTokenLimit tries to select a subset of files that fits within tokenLimit.
+// It sorts by weight (high to low) and size (small to large) to preferentially keep
+// small but important files.
 func trimFilesToTokenLimit(ctx *Context, tokenLimit int) ([]FileInfo, bool) {
-	// Heuristic:
-	// 1) Sort files by (weight desc, size asc) so we keep relevant small files.
-	// 2) Add until estimate <= tokenLimit.
+	// Copy slice and sort.
 	files := make([]FileInfo, len(ctx.Files))
 	copy(files, ctx.Files)
 	sort.Slice(files, func(i, j int) bool {
@@ -1029,7 +1051,7 @@ func trimFilesToTokenLimit(ctx *Context, tokenLimit int) ([]FileInfo, bool) {
 		// rough tokens for this file
 		toks := (len(f.Path) + len(f.Content)) / 4
 		if acc+toks > tokenLimit {
-			// skip file
+			// skip file if it would exceed the limit
 			continue
 		}
 		out = append(out, f)
