@@ -3,13 +3,9 @@
 
 # Output format: markdown, json, or yaml
 format: json
-
 ast: true
-
 focus: ""
-
 depth: 1
-
 workers: 4
 
 # Files and directories to exclude
