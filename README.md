@@ -5,7 +5,7 @@
 </div>
 
 <p align="center">
-  <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8.svg?style=for-the-badge&logo=go" alt="Go Version"></a>
+  <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.20+-00ADD8.svg?style=for-the-badge&logo=go" alt="Go Version"></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="License"></a>
 </p>
 
