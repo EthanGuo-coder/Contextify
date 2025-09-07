@@ -1,0 +1,48 @@
+# .ai-context.yaml
+# AI Code Context Extractor Configuration File
+# Place this file in your project root directory
+
+# Output format: markdown, json, or yaml
+format: markdown
+
+# Files and directories to exclude
+# These patterns are added to the default ignore list
+exclude:
+  - "*.test.go"
+  - "*_test.go"
+  - "testdata/*"
+  - "examples/*"
+  - "docs/*"
+  - "*.md"
+  - "LICENSE"
+  - "Makefile"
+  - ".github/*"
+  - ".gitlab/*"
+  - "*.svg"
+  - "*.png"
+  - "*.jpg"
+  - "*.jpeg"
+  - "*.gif"
+  - "*.ico"
+
+# Files and directories to include
+# If specified, only these patterns will be included
+# Leave empty to include all non-excluded files
+include: [ ]
+  # - "src/**/*.go"
+  # - "pkg/**/*.go"
+  # - "internal/**/*.go"
+# - "*.yaml"
+# - "go.mod"
+# - "go.sum"
+
+# Strip comments from code to reduce token usage
+strip_comments: false
+
+# Maximum estimated tokens (0 for unlimited)
+# Common limits:
+# - GPT-3.5: 4096
+# - GPT-4: 8192
+# - GPT-4-32k: 32768
+# - Claude: 100000
+max_tokens: 32000
