@@ -1,5 +1,4 @@
-# .ai-context.yaml
-# AI Code Context Extractor Configuration File
+# .ai-context.yaml - Contextify configuration (example)
 # Place this file in your project root directory
 
 # Output format: markdown, json, or yaml

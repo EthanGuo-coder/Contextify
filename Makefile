@@ -1,41 +1,35 @@
-# Variables
-BINARY_NAME=acc
+# Makefile for Contextify
+BINARY_NAME=contextify
 GO=go
 GOFLAGS=-v
 LDFLAGS=-s -w
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
-# Build variables
 BUILD_DIR=build
 DIST_DIR=dist
 
-# Platforms for cross-compilation
 PLATFORMS=darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 
-# Default target
 .DEFAULT_GOAL := build
 
-# Build the binary
 .PHONY: build
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS) -X main.version=$(VERSION)" -o $(BINARY_NAME) main.go
 	@echo "Build complete: ./$(BINARY_NAME)"
 
-# Install the binary to $GOPATH/bin
 .PHONY: install
 install:
 	@echo "Installing $(BINARY_NAME)..."
-	@$(GO) install $(GOFLAGS) -ldflags "$(LDFLAGS) -X main.version=$(VERSION)"
-	@echo "Installed to $$(go env GOPATH)/bin/$(BINARY_NAME)"
+	@$(GO) install $(GOFLAGS) -ldflags "$(LDFLAGS) -X main.version=$(VERSION)" .
+	@echo "Installed."
 
-# Run the application
 .PHONY: run
 run:
-	@$(GO) run main.go extract
+	@echo "Running contextify against current directory and writing to ./contextify_output-$(shell date -u +%Y%m%d_%H%M%S).md"
+	@./$(BINARY_NAME) extract --path . --format markdown -o ./contextify_output-$(shell date -u +%Y%m%d_%H%M%S).md || true
 
-# Clean build artifacts
 .PHONY: clean
 clean:
 	@echo "Cleaning..."
@@ -45,13 +39,11 @@ clean:
 	@rm -f coverage.out
 	@echo "Clean complete"
 
-# Run tests
 .PHONY: test
 test:
 	@echo "Running tests..."
 	@$(GO) test -v ./...
 
-# Run tests with coverage
 .PHONY: test-coverage
 test-coverage:
 	@echo "Running tests with coverage..."
@@ -59,14 +51,12 @@ test-coverage:
 	@$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
-# Format code
 .PHONY: fmt
 fmt:
 	@echo "Formatting code..."
 	@$(GO) fmt ./...
 	@echo "Format complete"
 
-# Lint code
 .PHONY: lint
 lint:
 	@echo "Linting code..."
@@ -78,13 +68,11 @@ lint:
 		exit 1; \
 	fi
 
-# Run go vet
 .PHONY: vet
 vet:
 	@echo "Running go vet..."
 	@$(GO) vet ./...
 
-# Download dependencies
 .PHONY: deps
 deps:
 	@echo "Downloading dependencies..."
@@ -92,7 +80,6 @@ deps:
 	@$(GO) mod tidy
 	@echo "Dependencies downloaded"
 
-# Update dependencies
 .PHONY: update-deps
 update-deps:
 	@echo "Updating dependencies..."
@@ -100,7 +87,6 @@ update-deps:
 	@$(GO) mod tidy
 	@echo "Dependencies updated"
 
-# Build for all platforms
 .PHONY: build-all
 build-all:
 	@echo "Building for all platforms..."
@@ -116,7 +102,6 @@ build-all:
 	done
 	@echo "Cross-platform build complete"
 
-# Create release archives
 .PHONY: release
 release: clean build-all
 	@echo "Creating release archives..."
@@ -128,14 +113,12 @@ release: clean build-all
 	done
 	@echo "Release archives created in $(DIST_DIR)/"
 
-# Development build with race detector
 .PHONY: dev
 dev:
 	@echo "Building with race detector..."
 	@$(GO) build -race -o $(BINARY_NAME)-dev main.go
 	@echo "Development build complete: ./$(BINARY_NAME)-dev"
 
-# Check for security vulnerabilities
 .PHONY: security
 security:
 	@echo "Checking for vulnerabilities..."
@@ -146,14 +129,12 @@ security:
 		echo "  go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
 	fi
 
-# Generate documentation
 .PHONY: docs
 docs:
 	@echo "Generating documentation..."
 	@$(GO) doc -all > API.md
 	@echo "Documentation generated: API.md"
 
-# Show help
 .PHONY: help
 help:
 	@echo "AI Code Context Extractor - Makefile Commands"
@@ -164,7 +145,7 @@ help:
 	@echo "Targets:"
 	@echo "  build          Build the binary for current platform"
 	@echo "  install        Install the binary to \$$GOPATH/bin"
-	@echo "  run            Run the application"
+	@echo "  run            Run the application (writes to current dir)"
 	@echo "  clean          Remove build artifacts"
 	@echo "  test           Run tests"
 	@echo "  test-coverage  Run tests with coverage report"
@@ -180,11 +161,12 @@ help:
 	@echo "  docs           Generate documentation"
 	@echo "  help           Show this help message"
 
-# Quick test build and run
 .PHONY: quick
 quick: build
 	@echo ""
-	@echo "Testing the build..."
-	@./$(BINARY_NAME) extract --path . --format markdown | head -50
+	@echo "Testing the build and generating quick output..."
+	@./$(BINARY_NAME) extract --path . --format markdown -o ./contextify_quick.md --strip-comments || true
+	@echo "Quick output saved to ./contextify_quick.md (first 50 lines):"
+	@head -n 50 ./contextify_quick.md || true
 	@echo ""
 	@echo "... (output truncated)"

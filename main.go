@@ -39,18 +39,17 @@ type Config struct {
 	Workers       int      `json:"workers" yaml:"workers"`
 }
 
-// FileInfo represents file extraction result
+// FileInfo represents file extraction result.
 type FileInfo struct {
 	Path     string   `json:"path" yaml:"path"`
 	Language string   `json:"language" yaml:"language"`
 	Content  string   `json:"content" yaml:"content"`
 	Size     int64    `json:"size" yaml:"size"`
 	AST      *ASTInfo `json:"ast,omitempty" yaml:"ast,omitempty"`
-	// relevance weight for trimming (higher -> keep)
-	Weight int `json:"-" yaml:"-"`
+	Weight   int      `json:"-" yaml:"-"`
 }
 
-// ASTInfo holds lightweight AST summary for Go files
+// ASTInfo holds lightweight AST summary for Go files.
 type ASTInfo struct {
 	Package   string   `json:"package" yaml:"package"`
 	Imports   []string `json:"imports" yaml:"imports"`
@@ -58,7 +57,7 @@ type ASTInfo struct {
 	Functions []string `json:"functions" yaml:"functions"`
 }
 
-// Context represents full project context
+// Context represents full project context.
 type Context struct {
 	ProjectPath     string     `json:"project_path" yaml:"project_path"`
 	TreeStructure   string     `json:"tree_structure" yaml:"tree_structure"`
@@ -150,7 +149,7 @@ var (
 
 func init() {
 	extractCmd.Flags().StringVarP(&cfgPath, "path", "p", ".", "Path to the project directory")
-	extractCmd.Flags().StringVarP(&cfgOutput, "output", "o", "", "Output file path (default: stdout)")
+	extractCmd.Flags().StringVarP(&cfgOutput, "output", "o", "", "Output file path (default: auto-generated in project dir)")
 	extractCmd.Flags().StringVarP(&cfgFormat, "format", "f", "markdown", "Output format (markdown, json, yaml)")
 	extractCmd.Flags().StringSliceVarP(&cfgExclude, "exclude", "e", []string{}, "Patterns to exclude (glob)")
 	extractCmd.Flags().StringSliceVarP(&cfgInclude, "include", "i", []string{}, "Patterns to include (glob)")
@@ -217,8 +216,33 @@ func runExtract(cmd *cobra.Command, args []string) error {
 	}
 
 	if cfg.Output == "" {
-		fmt.Print(outStr)
+		ext := "md"
+		switch strings.ToLower(cfg.Format) {
+		case "json":
+			ext = "json"
+		case "yaml", "yml":
+			ext = "yaml"
+		case "markdown", "md":
+			ext = "md"
+		}
+		tstamp := time.Now().UTC().Format("20060102_150405")
+		defaultName := fmt.Sprintf("contextify-%s.%s", tstamp, ext)
+		// prefer writing into project path, but fallback to current working dir if not writable
+		outPath := filepath.Join(cfg.Path, defaultName)
+		if err := os.WriteFile(outPath, []byte(outStr), 0644); err != nil {
+			// fallback to cwd
+			cwd, _ := os.Getwd()
+			outPath = filepath.Join(cwd, defaultName)
+			if err2 := os.WriteFile(outPath, []byte(outStr), 0644); err2 != nil {
+				// final fallback: stdout
+				fmt.Fprintln(os.Stderr, "Warning: failed to write to project dir or cwd; printing to stdout")
+				fmt.Print(outStr)
+				return nil
+			}
+		}
+		fmt.Printf("Context extracted successfully to %s\n", outPath)
 	} else {
+		// Write to user-specified output
 		if err := os.WriteFile(cfg.Output, []byte(outStr), 0644); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
@@ -390,7 +414,7 @@ func processFile(path string, cfg *Config) (*FileInfo, error) {
 	return fi, nil
 }
 
-// parseGoASTFromBytes returns a lightweight AST summary (no deep analysis)
+// parseGoASTFromBytes returns a lightweight AST summary (no deep analysis).
 func parseGoASTFromBytes(src []byte) *ASTInfo {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "", src, parser.ParseComments)
@@ -452,14 +476,13 @@ func formatNode(w io.Writer, n interface{}) error {
 		_, _ = io.WriteString(w, ".")
 		_ = formatNode(w, v.Sel)
 	default:
-		// fallback to empty
+		// fallback: nothing
 	}
 	return nil
 }
 
 // performGoAnalysis builds a simple call graph for functions and applies focus/depth tracing
 func performGoAnalysis(ctx *Context, cfg *Config) {
-	// Build maps: filename -> source bytes, funcName -> (file, start, end)
 	type funcLoc struct {
 		File   string
 		Name   string
@@ -489,7 +512,6 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 		}
 		fileASTs[f.Path] = astFile
 
-		// find function declarations
 		for _, decl := range astFile.Decls {
 			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name != nil {
 				name := fd.Name.Name
@@ -506,7 +528,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 					Name:   key,
 					Start:  start,
 					End:    end,
-					Weight: 10, // default higher weight
+					Weight: 10,
 				}
 			}
 		}
@@ -514,7 +536,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 
 	// Build call graph: function -> called function names
 	callGraph := map[string]map[string]struct{}{}
-	for filePath, astFile := range fileASTs {
+	for _, astFile := range fileASTs {
 		ast.Inspect(astFile, func(n ast.Node) bool {
 			// We look for CallExpr; extract simple Ident or SelectorExpr names
 			if call, ok := n.(*ast.CallExpr); ok {
@@ -550,10 +572,9 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 			}
 			return true
 		})
-		_ = filePath
 	}
 
-	// If focus specified, BFS on call graph to depth and mark relevant functions/files
+	// Focus BFS + weight marking
 	if cfg.Focus != "" {
 		// normalize focus: try to match exactly or suffix match
 		queue := []string{cfg.Focus}
@@ -585,7 +606,7 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 			nextQueue = []string{}
 			depth++
 		}
-		// Additionally, include callers of focus (usage tracing) by scanning callGraph
+		// mark callers of visited callees
 		for caller, callees := range callGraph {
 			for callee := range callees {
 				if _, ok := visited[callee]; ok {
@@ -600,12 +621,9 @@ func performGoAnalysis(ctx *Context, cfg *Config) {
 			}
 		}
 	}
-
-	// Attach AST summary to ctx.Files if AST requested (we may have parsed earlier)
-	// This is already done in processFile when cfg.AST true.
 }
 
-// findEnclosingFunc finds ast.FuncDecl that encloses the given position
+// findEnclosingFunc finds ast.FuncDecl that encloses the given position.
 func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 	var found *ast.FuncDecl
 	for _, decl := range file.Decls {
@@ -620,10 +638,9 @@ func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 }
 
 func stripComments(content string, language string) string {
-	// Use robust multiline regexes with flags
+	// Use robust regexes
 	switch language {
 	case "go", "java", "javascript", "typescript", "c", "cpp", "csharp", "rust", "swift", "kotlin", "scala":
-		// single-line // and multi-line /* */
 		reSingle := regexp.MustCompile(`(?m)//.*$`)
 		content = reSingle.ReplaceAllString(content, "")
 		reMulti := regexp.MustCompile(`(?s)/\*.*?\*/`)
@@ -657,7 +674,7 @@ func stripComments(content string, language string) string {
 }
 
 func shouldExclude(path string, excludePatterns []string, includePatterns []string) bool {
-	// If include patterns specified: only include those matching
+	// If include specified -> whitelist behavior
 	if len(includePatterns) > 0 {
 		included := false
 		for _, pat := range includePatterns {
@@ -666,7 +683,6 @@ func shouldExclude(path string, excludePatterns []string, includePatterns []stri
 				included = true
 				break
 			}
-			// also try matching basename
 			base := filepath.Base(path)
 			m2, _ := doublestar.Match(pat, base)
 			if m2 {
@@ -712,7 +728,7 @@ func shouldExclude(path string, excludePatterns []string, includePatterns []stri
 		}
 	}
 
-	// Apply negations: if any negation matches, do NOT exclude
+	// Apply negations
 	for _, n := range negations {
 		if ok, _ := doublestar.Match(n, path); ok {
 			return false
