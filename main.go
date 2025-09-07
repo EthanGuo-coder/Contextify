@@ -197,6 +197,28 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Attempt to detect current executable name and add it to exclude list.
+	if exePath, err := os.Executable(); err == nil {
+		exeBase := filepath.Base(exePath)                              // e.g. "contextify" or "contextify.exe"
+		exeNoExt := strings.TrimSuffix(exeBase, filepath.Ext(exeBase)) // e.g. "contextify"
+
+		// Add both the exact exe name and the no-extension name
+		cfg.Exclude = appendUnique(cfg.Exclude, exeBase)
+		if exeNoExt != exeBase {
+			cfg.Exclude = appendUnique(cfg.Exclude, exeNoExt)
+		}
+
+		// Also add common variants (in case user named binary differently)
+		// Patterns for auto-generated output files to avoid scanning them
+		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.md", exeNoExt))
+		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s_*.md", exeNoExt))
+		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.json", exeNoExt))
+		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.yaml", exeNoExt))
+		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s-*.yml", exeNoExt))
+		// Also exclude a generic fixed name just in case
+		cfg.Exclude = appendUnique(cfg.Exclude, fmt.Sprintf("%s.md", exeNoExt))
+	}
+
 	// Validate
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
@@ -205,6 +227,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		cfg.Depth = 1
 	}
 
+	// Continue with extraction
 	ctx, err := extractContext(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to extract context: %w", err)
@@ -215,6 +238,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate output: %w", err)
 	}
 
+	// If --output not specified, write to project directory with timestamped filename (safe default)
 	if cfg.Output == "" {
 		ext := "md"
 		switch strings.ToLower(cfg.Format) {
@@ -226,8 +250,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 			ext = "md"
 		}
 		tstamp := time.Now().UTC().Format("20060102_150405")
-		defaultName := fmt.Sprintf("contextify-%s.%s", tstamp, ext)
-		// prefer writing into project path, but fallback to current working dir if not writable
+		defaultName := fmt.Sprintf("%s-%s.%s", filepath.Base(strings.TrimSuffix(os.Args[0], filepath.Ext(os.Args[0]))), tstamp, ext)
 		outPath := filepath.Join(cfg.Path, defaultName)
 		if err := os.WriteFile(outPath, []byte(outStr), 0644); err != nil {
 			// fallback to cwd
@@ -254,6 +277,16 @@ func runExtract(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// appendUnique appends value to slice only if it's not already present.
+func appendUnique(slice []string, val string) []string {
+	for _, s := range slice {
+		if s == val {
+			return slice
+		}
+	}
+	return append(slice, val)
 }
 
 func extractContext(cfg *Config) (*Context, error) {
@@ -380,21 +413,39 @@ func processFile(path string, cfg *Config) (*FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	relPath, _ := filepath.Rel(cfg.Path, path)
 	ext := strings.ToLower(filepath.Ext(path))
 	language := languageMap[ext]
 	if language == "" {
 		language = "plaintext"
 	}
-	contentStr := string(data)
-
-	if cfg.StripComments {
-		contentStr = stripComments(contentStr, language)
-	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
+	}
+
+	// If file appears to be binary, do not include raw content — only metadata/placeholder
+	if isBinary(data) {
+		return &FileInfo{
+			Path:     relPath,
+			Language: "binary",
+			Content:  fmt.Sprintf("<binary file omitted, %d bytes>", info.Size()),
+			Size:     info.Size(),
+			Weight:   0, // deprioritize binaries for trimming/selection
+		}, nil
+	}
+
+	// Avoid including very large text files' full contents (saves tokens)
+	const maxContentBytes = 1 << 20 // 1 MB
+	contentStr := string(data)
+	if info.Size() > int64(maxContentBytes) {
+		contentStr = fmt.Sprintf("<file too large, %d bytes, omitted>", info.Size())
+	} else {
+		if cfg.StripComments {
+			contentStr = stripComments(contentStr, language)
+		}
 	}
 
 	fi := &FileInfo{
@@ -407,11 +458,52 @@ func processFile(path string, cfg *Config) (*FileInfo, error) {
 
 	// optionally parse AST for Go
 	if cfg.AST && language == "go" {
-		astInfo := parseGoASTFromBytes(data)
+		astInfo := parseGoASTFromBytes([]byte(contentStr))
 		fi.AST = astInfo
 	}
 
 	return fi, nil
+}
+
+// isBinary checks whether a byte slice is likely a binary file.
+// Heuristics:
+// - ELF header (0x7f 'E”L”F') => true
+// - PE header 'MZ' => true
+// - contains NUL byte => true
+// - sample non-text control bytes ratio > threshold => true
+func isBinary(data []byte) bool {
+	if len(data) >= 4 && data[0] == 0x7f && bytes.Equal(data[1:4], []byte("ELF")) {
+		return true
+	}
+	if len(data) >= 2 && data[0] == 'M' && data[1] == 'Z' {
+		return true
+	}
+	// If contains NUL, almost certainly binary
+	for i := 0; i < len(data) && i < 512; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+	// Heuristic: proportion of control/non-printable bytes in sample
+	sample := len(data)
+	if sample > 1024 {
+		sample = 1024
+	}
+	if sample == 0 {
+		return false
+	}
+	nonText := 0
+	for i := 0; i < sample; i++ {
+		b := data[i]
+		// allow common whitespace and printable range and UTF-8 continuation bytes (>=0x80)
+		if b == '\n' || b == '\r' || b == '\t' {
+			continue
+		}
+		if b < 0x20 {
+			nonText++
+		}
+	}
+	return (nonText*100)/sample > 10 // >10% control chars -> binary
 }
 
 // parseGoASTFromBytes returns a lightweight AST summary (no deep analysis).
@@ -481,7 +573,7 @@ func formatNode(w io.Writer, n interface{}) error {
 	return nil
 }
 
-// performGoAnalysis builds a simple call graph for functions and applies focus/depth tracing
+// performGoAnalysis builds a simple call graph for functions and applies focus/depth tracing.
 func performGoAnalysis(ctx *Context, cfg *Config) {
 	type funcLoc struct {
 		File   string
@@ -757,7 +849,6 @@ func readGitignore(projectPath string) []string {
 		if ln == "" || strings.HasPrefix(ln, "#") {
 			continue
 		}
-		// accept patterns and keep '!' negations
 		res = append(res, ln)
 	}
 	return res
@@ -768,7 +859,6 @@ func estimateTokens(ctx *Context) int {
 	for _, f := range ctx.Files {
 		totalChars += len(f.Path) + len(f.Content)
 		if f.AST != nil {
-			// small safe addition for AST meta
 			totalChars += len(strings.Join(f.AST.Functions, ",")) + len(strings.Join(f.AST.Structs, ","))
 		}
 	}
