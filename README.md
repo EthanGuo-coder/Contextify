@@ -1,3 +1,5 @@
+![](./main_img.png)
+
 # 🤖 Contextify - AI Code Context Extractor
 
 <p align="center">
