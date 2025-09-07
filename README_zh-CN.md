@@ -1,5 +1,6 @@
 <div align="center">
 <img alt="Preview" src="./public/contextify.png" width="100%" style="border-radius: 8px">
+
 # 🤖 Contextify - AI 代码上下文提取工具
 </div>
 
